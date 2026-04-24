@@ -3,7 +3,7 @@ import {
   Thread, StackFrame, Source, Scope, Handles, OutputEvent
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
-import { EmulatorClient, Registers } from './emulatorClient';
+import { EmulatorServer, Registers } from './emulatorServer';
 import * as path from 'path';
 
 interface LaunchArgs extends DebugProtocol.LaunchRequestArguments {
@@ -14,8 +14,10 @@ interface LaunchArgs extends DebugProtocol.LaunchRequestArguments {
 
 export class M68kDebugSession extends LoggingDebugSession {
   private static THREAD_ID = 1;
+  private configurationDone!: Promise<void>;
+  private configurationDoneResolve!: () => void;
 
-  private client = new EmulatorClient();
+  private client = new EmulatorServer();
   private variableHandles = new Handles<'data' | 'address' | 'status'>();
 
   // Latest state from the emulator — updated on every 'stopped' event.
@@ -24,10 +26,13 @@ export class M68kDebugSession extends LoggingDebugSession {
   private regs: Registers = { d: new Array(8).fill(0), a: new Array(8).fill(0), pc: 0, sr: 0 };
 
   public constructor() {
-    super('m68k-debug.log');
-    this.setDebuggerLinesStartAt1(true);
-    this.setDebuggerColumnsStartAt1(true);
-  }
+  super('m68k-debug.log');
+  this.setDebuggerLinesStartAt1(true);
+  this.setDebuggerColumnsStartAt1(true);
+  this.configurationDone = new Promise((resolve) => {
+    this.configurationDoneResolve = resolve;
+  });
+}
 
 protected initializeRequest(
   response: DebugProtocol.InitializeResponse,
@@ -49,33 +54,52 @@ protected async launchRequest(
   response: DebugProtocol.LaunchResponse,
   args: LaunchArgs
 ): Promise<void> {
-  const url = args.emulatorUrl ?? 'ws://localhost:9229';
+  const port = 9229;
 
   try {
-    await this.client.connect(url);
-  } catch (err) {
-    this.sendErrorResponse(response, 1001, `Cannot connect to emulator at ${url}: ${err}`);
+    await this.client.listen(port);
+  } catch (err: any) {
+    this.sendErrorResponse(response, 1001,
+      `Cannot listen on port ${port}: ${err.message}. Is another debug session running?`);
     return;
   }
 
-  // Hook emulator events → DAP events. Do this BEFORE sending any commands.
+  // Hook emulator events.
   this.client.on('stopped', (msg: any) => {
     this.currentFile = msg.file;
     this.currentLine = msg.line;
     if (msg.registers) { this.regs = msg.registers; }
     this.sendEvent(new StoppedEvent(msg.reason ?? 'step', M68kDebugSession.THREAD_ID));
   });
-
   this.client.on('output', (msg: any) => {
     this.sendEvent(new OutputEvent(msg.text + '\n', msg.category ?? 'stdout'));
   });
-
   this.client.on('terminated', () => {
     this.sendEvent(new TerminatedEvent());
   });
+  this.client.on('emulator-disconnected', () => {
+    this.sendEvent(new OutputEvent('Emulator disconnected.\n', 'console'));
+  });
 
-  this.client.load(args.program);
   this.sendResponse(response);
+
+  // Wait for the emulator to connect (user should open Live Preview).
+  try {
+    await this.client.waitForEmulator(30_000);
+  } catch (err: any) {
+    this.sendEvent(new OutputEvent(
+      `${err.message}. Open the emulator in Live Preview (Ctrl+Shift+P → "Live Preview: Show Preview").\n`,
+      'stderr'
+    ));
+    this.sendEvent(new TerminatedEvent());
+    return;
+  }
+
+  // Now wait for VS Code to finish sending breakpoints + configurationDone.
+  await this.configurationDone;
+
+  // Tell emulator to load.
+  this.client.load(args.program);
 }
 
 protected setBreakPointsRequest(
@@ -105,11 +129,7 @@ protected configurationDoneRequest(
   args: DebugProtocol.ConfigurationDoneArguments
 ): void {
   super.configurationDoneRequest(response, args);
-  // If the user set stopOnEntry, the emulator should already be paused at PC=entry.
-  // Otherwise, run.
-  // Simplest approach: always start by continuing, and have the emulator honour
-  // stopOnEntry itself by not auto-running after `load`.
-  this.client.cont();
+  this.configurationDoneResolve();
 }
 
 protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
