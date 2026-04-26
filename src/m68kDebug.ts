@@ -55,6 +55,7 @@ protected async launchRequest(
   args: LaunchArgs
 ): Promise<void> {
   const port = 9229;
+  this.sendEvent(new OutputEvent(`[adapter] launchRequest start\n`, 'console'));
 
   try {
     await this.client.listen(port);
@@ -82,10 +83,16 @@ protected async launchRequest(
   });
 
   this.sendResponse(response);
+  this.sendEvent(new OutputEvent(
+  `[adapter] before waitForEmulator, ws connected? ${(this.client as any).ws ? 'yes' : 'no'}\n`,
+  'console'
+));
+  this.sendEvent(new OutputEvent(`[adapter] launch responded, waiting for emulator\n`, 'console'));
 
   // Wait for the emulator to connect (user should open Live Preview).
   try {
     await this.client.waitForEmulator(30_000);
+    this.sendEvent(new OutputEvent(`[adapter] past waitForEmulator\n`, 'console'));
   } catch (err: any) {
     this.sendEvent(new OutputEvent(
       `${err.message}. Open the emulator in Live Preview (Ctrl+Shift+P → "Live Preview: Show Preview").\n`,
@@ -95,10 +102,12 @@ protected async launchRequest(
     return;
   }
 
-  // Now wait for VS Code to finish sending breakpoints + configurationDone.
+    this.sendEvent(new OutputEvent(`[adapter] emulator connected, awaiting configurationDone\n`, 'console'));
+// Now wait for VS Code to finish sending breakpoints + configurationDone.
   await this.configurationDone;
 
-  // Tell emulator to load.
+   this.sendEvent(new OutputEvent(`[adapter] configurationDone resolved, sending load\n`, 'console'));
+ // Tell emulator to load.
   this.client.load(args.program);
 }
 
@@ -106,6 +115,8 @@ protected setBreakPointsRequest(
   response: DebugProtocol.SetBreakpointsResponse,
   args: DebugProtocol.SetBreakpointsArguments
 ): void {
+  this.sendEvent(new OutputEvent(`[adapter] setBreakpoints: ${args.source.path} lines=${(args.breakpoints ?? []).map(b => b.line).join(',')}\n`, 'console'));
+ 
   const sourcePath = args.source.path ?? '';
   const requested = args.breakpoints ?? [];
   const lines = requested.map(bp => this.convertClientLineToDebugger(bp.line));
@@ -128,6 +139,7 @@ protected configurationDoneRequest(
   response: DebugProtocol.ConfigurationDoneResponse,
   args: DebugProtocol.ConfigurationDoneArguments
 ): void {
+  this.sendEvent(new OutputEvent(`[adapter] configurationDoneRequest called\n`, 'console'));
   super.configurationDoneRequest(response, args);
   this.configurationDoneResolve();
 }

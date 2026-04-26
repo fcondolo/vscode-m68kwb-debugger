@@ -1,30 +1,30 @@
 {
   "name": "m68kwb-debug",
-  "displayName": "M58KWB Debug",
+  "displayName": "M68KWB Debug",
   "version": "0.1.0",
   "publisher": "Soundy",
-  "description": "Starter extension for developing debug adapters for VS Code.",
+  "description": "Use VS code debugger to debug M68KWB projects",
   "author": {
-    "name": "Microsoft Corporation"
+    "name": "Soundy"
   },
   "license": "MIT",
   "keywords": [
     "multi-root ready"
   ],
   "engines": {
-    "vscode": "^1.66.0"
+    "vscode": "^1.80.0"
   },
-  "icon": "images/mock-debug-icon.png",
+  "icon": "images/M68KWB-debug-icon.png",
   "categories": [
     "Debuggers"
   ],
   "private": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/Microsoft/vscode-mock-debug.git"
+    "url": "https://https://github.com/fcondolo/vscode-mock-debug-main.git"
   },
   "bugs": {
-    "url": "https://github.com/Microsoft/vscode-mock-debug/issues"
+    "url": "https://github.com/fcondolo/vscode-mock-debug-main/issues"
   },
   "scripts": {
     "compile": "tsc -p ./",
@@ -36,7 +36,7 @@
     "package": "vsce package",
     "publish": "vsce publish",
     "publish-pre-release": "vsce publish --pre-release",
-    "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify && npm run -S esbuild-web -- --minify",
+    "vscode:prepublish": "rimraf dist && npm run -S esbuild-base -- --minify",
     "test": "npm run typecheck"
   },
   "devDependencies": {
@@ -49,6 +49,7 @@
     "@vscode/debugadapter": "^1.68.0",
     "@vscode/debugadapter-testsupport": "^1.68.0",
     "@vscode/debugprotocol": "^1.68.0",
+    "@vscode/vsce": "^3.9.1",
     "await-notify": "^1.0.1",
     "base64-js": "^1.5.1",
     "esbuild": "^0.25.0",
@@ -63,28 +64,27 @@
     "vsce": "^2.7.0"
   },
   "main": "./dist/extension.js",
-"activationEvents": [
-  "onDebugResolve:m68k",
-  "onDebugDynamicConfigurations:m68k"
-] ,
- "workspaceTrust": {
+  "activationEvents": [
+    "onDebugResolve:m68k",
+    "onDebugDynamicConfigurations:m68k"
+  ],
+  "workspaceTrust": {
     "request": "never"
   },
   "contributes": {
-        "languages": [
-          {
-            "id": "m68k",
-            "extensions": [
-              ".s",
-              ".asm",
-              ".x68"
-            ],
-            "aliases": [
-              "M68K Assembly"
-            ]
-          }
+    "languages": [
+      {
+        "id": "m68k",
+        "extensions": [
+          ".s",
+          ".asm",
+          ".x68"
         ],
-
+        "aliases": [
+          "M68K Assembly"
+        ]
+      }
+    ],
     "menus": {
       "editor/title/run": [
         {
@@ -135,7 +135,11 @@
         "title": "Toggle between decimal and hex formatting"
       }
     ],
-  "breakpoints": [{ "language": "m68k" }],
+    "breakpoints": [
+      {
+        "language": "m68k"
+      }
+    ],
     "debuggers": [
       {
         "type": "m68k",
@@ -216,26 +220,30 @@
             }
           }
         },
-        "initialConfigurations": [{
-          "type": "m68k",
-          "request": "launch",
-          "name": "Debug M68K program",
-          "program": "${workspaceFolder}/main.s",
-          "emulatorUrl": "ws://localhost:9229",
-          "stopOnEntry": true
-        }],
-        "configurationSnippets": [{
-          "label": "M68K Debug: Launch",
-          "description": "A new configuration for launching an M68K debug session",
-          "body": {
+        "initialConfigurations": [
+          {
             "type": "m68k",
             "request": "launch",
-            "name": "${2:Launch M68K}",
-            "program": "^\"\\${workspaceFolder}/${1:main.s}\"",
+            "name": "Debug M68K program",
+            "program": "${workspaceFolder}/main.s",
             "emulatorUrl": "ws://localhost:9229",
             "stopOnEntry": true
           }
-        }],
+        ],
+        "configurationSnippets": [
+          {
+            "label": "M68K Debug: Launch",
+            "description": "A new configuration for launching an M68K debug session",
+            "body": {
+              "type": "m68k",
+              "request": "launch",
+              "name": "${2:Launch M68K}",
+              "program": "^\"\\${workspaceFolder}/${1:main.s}\"",
+              "emulatorUrl": "ws://localhost:9229",
+              "stopOnEntry": true
+            }
+          }
+        ],
         "variables": {
           "AskForProgramName": "extension.mock-debug.getProgramName"
         }
