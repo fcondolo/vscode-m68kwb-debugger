@@ -24,9 +24,11 @@ export class M68kDebugSession extends LoggingDebugSession {
   private currentFile = '';
   private currentLine = 1;
   private regs: Registers = { d: new Array(8).fill(0), a: new Array(8).fill(0), pc: 0, sr: 0 };
+  private currentStack: Array<{ name: string; file: string; line: number }> = [];
 
   public constructor() {
   super('m68k-debug.log');
+
   this.setDebuggerLinesStartAt1(true);
   this.setDebuggerColumnsStartAt1(true);
   this.configurationDone = new Promise((resolve) => {
@@ -65,20 +67,25 @@ protected async launchRequest(
     return;
   }
 
-  // Hook emulator events.
-this.client.on('stopped', (msg: any) => {
+
+  this.client.on('stopped', (msg: any) => {
   this.sendEvent(new OutputEvent(
     `[adapter] stopped: file=${msg.file} line=${msg.line} reason=${msg.reason}\n`,
     'console'
   ));
+
   this.currentFile = msg.file;
   this.currentLine = msg.line;
   if (msg.registers) { this.regs = msg.registers; }
+  this.currentStack = msg.stack ?? [];
 
   const evt = new StoppedEvent(msg.reason ?? 'step', M68kDebugSession.THREAD_ID);
   (evt.body as any).allThreadsStopped = true;
+  if (msg.description) (evt.body as any).description = msg.description;
+  if (msg.text)        (evt.body as any).text        = msg.text;
   this.sendEvent(evt);
-  });
+});
+
 
   this.client.on('output', (msg: any) => {
     this.sendEvent(new OutputEvent(msg.text + '\n', msg.category ?? 'stdout'));
@@ -158,26 +165,37 @@ protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
   this.sendResponse(response);
 }
 
+
 protected stackTraceRequest(
   response: DebugProtocol.StackTraceResponse,
   args: DebugProtocol.StackTraceArguments
 ): void {
- this.sendEvent(new OutputEvent(
-    `[adapter] stackTrace asked: returning ${this.currentFile}:${this.currentLine}\n`,
-    'console'
-  ));
-    const name = path.basename(this.currentFile) || 'unknown';
-  const source = new Source(name, this.currentFile);
-  const frame = new StackFrame(
-    1,                   // frame id
-    'main',              // function name — you could derive this from your symbol table later
-    source,
-    this.convertDebuggerLineToClient(this.currentLine),
-    1                    // column
-  );
-  response.body = { stackFrames: [frame], totalFrames: 1 };
+  // Build frames from currentStack. If empty, fall back to a single frame
+  // with currentFile/currentLine.
+  let frames: DebugProtocol.StackFrame[];
+
+  if (this.currentStack.length > 0) {
+    frames = this.currentStack.map((f, i) => ({
+      id: i + 1,
+      name: f.name || '???',
+      source: new Source(path.basename(f.file), f.file),
+      line: this.convertDebuggerLineToClient(f.line),
+      column: 1,
+    }));
+  } else {
+    frames = [{
+      id: 1,
+      name: 'main',
+      source: new Source(path.basename(this.currentFile), this.currentFile),
+      line: this.convertDebuggerLineToClient(this.currentLine),
+      column: 1,
+    } as DebugProtocol.StackFrame];
+  }
+
+  response.body = { stackFrames: frames, totalFrames: frames.length };
   this.sendResponse(response);
 }
+
 protected scopesRequest(
   response: DebugProtocol.ScopesResponse,
   args: DebugProtocol.ScopesArguments

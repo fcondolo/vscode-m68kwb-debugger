@@ -4,3 +4,8 @@ Debug adapter for the Motorola 68000 emulator. Connects to the emulator running 
 
 ## Requirements
 - ms-vscode.live-server extension
+
+
+BUILD:
+npm run build
+npx vsce package
