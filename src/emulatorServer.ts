@@ -25,10 +25,18 @@ export class EmulatorServer extends EventEmitter {
         this.ws = ws;
         this.emit('connected');
 
-        ws.on('message', (data) => {
-          const msg = JSON.parse(data.toString());
+      ws.on('message', (data) => {
+        const text = data.toString();
+        console.error('[server] received:', text);
+        try {
+          const msg = JSON.parse(text);
+          console.error('[server] parsed event:', msg.event);
           this.emit(msg.event, msg);
-        });
+        } catch (err) {
+          console.error('[server] parse failed:', err);
+        }
+      });
+
 
         ws.on('close', () => {
           if (this.ws === ws) { this.ws = undefined; }

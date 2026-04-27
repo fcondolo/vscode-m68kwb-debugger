@@ -66,12 +66,20 @@ protected async launchRequest(
   }
 
   // Hook emulator events.
-  this.client.on('stopped', (msg: any) => {
-    this.currentFile = msg.file;
-    this.currentLine = msg.line;
-    if (msg.registers) { this.regs = msg.registers; }
-    this.sendEvent(new StoppedEvent(msg.reason ?? 'step', M68kDebugSession.THREAD_ID));
+this.client.on('stopped', (msg: any) => {
+  this.sendEvent(new OutputEvent(
+    `[adapter] stopped: file=${msg.file} line=${msg.line} reason=${msg.reason}\n`,
+    'console'
+  ));
+  this.currentFile = msg.file;
+  this.currentLine = msg.line;
+  if (msg.registers) { this.regs = msg.registers; }
+
+  const evt = new StoppedEvent(msg.reason ?? 'step', M68kDebugSession.THREAD_ID);
+  (evt.body as any).allThreadsStopped = true;
+  this.sendEvent(evt);
   });
+
   this.client.on('output', (msg: any) => {
     this.sendEvent(new OutputEvent(msg.text + '\n', msg.category ?? 'stdout'));
   });
@@ -145,6 +153,7 @@ protected configurationDoneRequest(
 }
 
 protected threadsRequest(response: DebugProtocol.ThreadsResponse): void {
+  this.sendEvent(new OutputEvent('[adapter] threadsRequest called\n', 'console'));
   response.body = { threads: [new Thread(M68kDebugSession.THREAD_ID, 'M68K CPU')] };
   this.sendResponse(response);
 }
@@ -153,7 +162,11 @@ protected stackTraceRequest(
   response: DebugProtocol.StackTraceResponse,
   args: DebugProtocol.StackTraceArguments
 ): void {
-  const name = path.basename(this.currentFile) || 'unknown';
+ this.sendEvent(new OutputEvent(
+    `[adapter] stackTrace asked: returning ${this.currentFile}:${this.currentLine}\n`,
+    'console'
+  ));
+    const name = path.basename(this.currentFile) || 'unknown';
   const source = new Source(name, this.currentFile);
   const frame = new StackFrame(
     1,                   // frame id
