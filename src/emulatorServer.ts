@@ -6,11 +6,17 @@ export interface Registers {
   a: number[];
   pc: number;
   sr: number;
+  x: number;
+  n: number;
+  z: number;
+  v: number;
+  c: number;
 }
 
 export class EmulatorServer extends EventEmitter {
   private wss?: WebSocketServer;
   private ws?: WebSocket;
+  private pendingMessages: any[] = [];
 
   /** Start listening. Resolves when the server is bound to the port. */
   listen(port: number): Promise<void> {
@@ -23,6 +29,14 @@ export class EmulatorServer extends EventEmitter {
         // Only one emulator at a time. If a second connects, drop the old one.
         if (this.ws) { this.ws.close(); }
         this.ws = ws;
+
+        // Flush messages queued while disconnected
+        for (const obj of this.pendingMessages) {
+          console.error(`[server] FLUSH ${obj.cmd}`);
+          this.ws.send(JSON.stringify(obj));
+        }
+        this.pendingMessages = [];
+
         this.emit('connected');
 
       ws.on('message', (data) => {
@@ -40,6 +54,7 @@ export class EmulatorServer extends EventEmitter {
 
         ws.on('close', () => {
           if (this.ws === ws) { this.ws = undefined; }
+          this.pendingMessages = [];   // don't replay across reconnects
           this.emit('emulator-disconnected');
         });
       });
@@ -80,10 +95,12 @@ export class EmulatorServer extends EventEmitter {
   }
 
   private send(obj: any) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('EmulatorServer.send: no emulator connected, dropping', obj.cmd);
-      return;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.error(`[server] SEND ${obj.cmd}`);
+      this.ws.send(JSON.stringify(obj));
+    } else {
+      console.error(`[server] BUFFER ${obj.cmd}`);
+      this.pendingMessages.push(obj);
     }
-    this.ws.send(JSON.stringify(obj));
   }
 }

@@ -18,13 +18,14 @@ export class M68kDebugSession extends LoggingDebugSession {
   private configurationDoneResolve!: () => void;
 
   private client = new EmulatorServer();
-  private variableHandles = new Handles<'data' | 'address' | 'status'>();
+  private variableHandles = new Handles<'data' | 'address' | 'flags' | 'symbols'>();
 
   // Latest state from the emulator — updated on every 'stopped' event.
   private currentFile = '';
   private currentLine = 1;
-  private regs: Registers = { d: new Array(8).fill(0), a: new Array(8).fill(0), pc: 0, sr: 0 };
+  private regs: Registers = { d: new Array(8).fill(0), a: new Array(8).fill(0), pc: 0, sr: 0, x:0, n:0, z:0, v:0, c:0 };
   private currentStack: Array<{ name: string; file: string; line: number }> = [];
+  private currentVariables: Array<{ name: string; value: number; type?: string }> = [];
 
   public constructor() {
   super('m68k-debug.log');
@@ -45,6 +46,7 @@ protected initializeRequest(
   response.body.supportsSteppingGranularity = true;
   response.body.supportsStepBack = false;
   response.body.supportsRestartRequest = false;
+  response.body.supportsEvaluateForHovers = true;
 
   this.sendResponse(response);
 
@@ -52,10 +54,138 @@ protected initializeRequest(
   this.sendEvent(new InitializedEvent());
 }
 
+protected evaluateRequest(
+  response: DebugProtocol.EvaluateResponse,
+  args: DebugProtocol.EvaluateArguments
+): void {
+  const result = this.evaluateExpression(args.expression.trim());
+
+  if (result === undefined) {
+    // Don't sendErrorResponse — that pollutes the UI with red error toasts on every hover.
+    response.body = { result: '', variablesReference: 0 };
+    this.sendResponse(response);
+    return;
+  }
+
+  response.body = { result, variablesReference: 0 };
+  this.sendResponse(response);
+}
+
+private evaluateExpression(expr: string): string | undefined {
+  if (!expr) {return undefined;}
+
+  // First try simple register names
+  const reg = this.lookupRegister(expr);
+  if (reg !== undefined) {return this.formatHex32(reg);}
+
+
+ // Symbol lookup — by default show the value at the symbol's address
+  const sym = this.symbols[expr];
+  if (sym !== undefined) {
+    const value = this.readMemoryAtSymbol(sym);
+    return value !== undefined ? this.formatHex32(value) : undefined;
+  }
+
+
+  // Try memory dereference: (A0), (D2), (0x1000), (A6+4)
+  const memMatch = expr.match(/^\((.+)\)$/);
+  if (memMatch) {
+    const addrExpr = memMatch[1].trim();
+    const addr = this.evaluateNumeric(addrExpr);
+    if (addr !== undefined) {
+      // You'd need an emulator-side memory peek; for now, return placeholder
+      return `[mem at 0x${addr.toString(16).toUpperCase()}]`;
+    }
+    return undefined;
+  }
+
+  // Arithmetic: D0+4, A6-8, etc.
+  const num = this.evaluateNumeric(expr);
+  if (num !== undefined) return this.formatHex32(num);
+
+  return undefined;
+}
+
+private lookupRegister(name: string): number | undefined {
+  const upper = name.toUpperCase();
+  const dm = upper.match(/^D([0-7])$/); if (dm) return this.regs.d[+dm[1]];
+  const am = upper.match(/^A([0-7])$/); if (am) return this.regs.a[+am[1]];
+  if (upper === 'SP' || upper === 'A7') return this.regs.a[7];
+  if (upper === 'PC') return this.regs.pc;
+  if (upper === 'SR') return this.regs.sr;
+  return undefined;
+}
+
+/**
+ * Tiny expression evaluator: register | hex literal | dec literal | + | -
+ * Returns undefined for syntax it doesn't understand.
+ */
+private evaluateNumeric(expr: string): number | undefined {
+  // Tokenize into operands and +/- operators.
+  const tokens = expr.replace(/\s+/g, '').split(/(?=[+-])|(?<=[+-])/);
+  if (tokens.length === 0) {return undefined;}
+
+  let total = 0;
+  let sign = 1;
+
+  for (const tok of tokens) {
+    if (tok === '+') { sign = 1; continue; }
+    if (tok === '-') { sign = -1; continue; }
+
+    // Try register
+    const reg = this.lookupRegister(tok);
+    if (reg !== undefined) {
+      total += sign * (reg | 0);   // | 0 keeps it 32-bit signed
+      continue;
+    }
+
+    // Try hex (0x... or $...)
+    const hex = tok.match(/^(?:0x|\$)([0-9a-fA-F]+)$/);
+    if (hex) {
+      total += sign * parseInt(hex[1], 16);
+      continue;
+    }
+
+    // Try decimal
+    if (/^\d+$/.test(tok)) {
+      total += sign * parseInt(tok, 10);
+      continue;
+    }
+
+    return undefined;  // unknown token
+  }
+
+  return total >>> 0;   // wrap to unsigned 32-bit
+}
+
+private formatHex32(n: number): string {
+  return '0x' + (n >>> 0).toString(16).toUpperCase().padStart(8, '0');
+}
+
+private evaluate(expr: string): string | undefined {
+  // Simple register lookup: "D0", "A6", "PC", "SR"
+  const m = expr.match(/^[DAdaPpSs]\d?$/) || expr.match(/^[Pp][Cc]$|^[Ss][Rr]$/);
+  if (!m) {return undefined};
+
+  const e = expr.toUpperCase();
+  if (e === 'PC') {return '0x' + this.regs.pc.toString(16).toUpperCase().padStart(8, '0');}
+  const dm = e.match(/^D(\d)$/); if (dm) {return '0x' + (this.regs.d[+dm[1]] >>> 0).toString(16).toUpperCase().padStart(8, '0');}
+  const am = e.match(/^A(\d)$/); if (am) {return '0x' + (this.regs.a[+am[1]] >>> 0).toString(16).toUpperCase().padStart(8, '0');}
+  return undefined;
+}
+
 protected async launchRequest(
   response: DebugProtocol.LaunchResponse,
   args: LaunchArgs
 ): Promise<void> {
+  // Validate the program looks like M68K assembly
+  if (!args.program?.match(/\.(s|asm|x68|i)$/i)) {
+    this.sendErrorResponse(response, 1002,
+      `'${args.program}' is not an M68K source file. Open a .s, .asm, .x68, or .i file before pressing F5.`);
+    return;
+  }
+
+
   const port = 9229;
   this.sendEvent(new OutputEvent(`[adapter] launchRequest start\n`, 'console'));
 
@@ -73,7 +203,7 @@ protected async launchRequest(
     `[adapter] stopped: file=${msg.file} line=${msg.line} reason=${msg.reason}\n`,
     'console'
   ));
-
+  this.currentVariables = msg.variables ?? [];
   this.currentFile = msg.file;
   this.currentLine = msg.line;
   if (msg.registers) { this.regs = msg.registers; }
@@ -124,6 +254,12 @@ protected async launchRequest(
    this.sendEvent(new OutputEvent(`[adapter] configurationDone resolved, sending load\n`, 'console'));
  // Tell emulator to load.
   this.client.load(args.program);
+
+  if (args.stopOnEntry === false) {
+    // Wait briefly for the emulator to acknowledge the load (so it's at "entry"
+    // before we tell it to continue), then continue.
+    this.client.cont();
+  }  
 }
 
 protected setBreakPointsRequest(
@@ -196,6 +332,7 @@ protected stackTraceRequest(
   this.sendResponse(response);
 }
 
+
 protected scopesRequest(
   response: DebugProtocol.ScopesResponse,
   args: DebugProtocol.ScopesArguments
@@ -204,7 +341,8 @@ protected scopesRequest(
     scopes: [
       new Scope('Data Registers',    this.variableHandles.create('data'),    false),
       new Scope('Address Registers', this.variableHandles.create('address'), false),
-      new Scope('Status',            this.variableHandles.create('status'),  false),
+      new Scope('Flags',             this.variableHandles.create('flags'),  false),
+      new Scope('Symbols',           this.variableHandles.create('symbols'),   false),
     ],
   };
   this.sendResponse(response);
@@ -228,15 +366,53 @@ protected variablesRequest(
     variables = this.regs.a.map((v, i) => ({
       name: `A${i}`, value: hex32(v), variablesReference: 0,
     }));
-  } else if (kind === 'status') {
+  } else if (kind === 'flags') {
+    // Decompose SR into individual flag bits
+    const sr = this.regs.sr;
     variables = [
-      { name: 'PC', value: hex32(this.regs.pc), variablesReference: 0 },
-      { name: 'SR', value: hex16(this.regs.sr), variablesReference: 0 },
+      { name: 'X (Extend)',        value: this.regs.x.toString(), variablesReference: 0 },
+      { name: 'N (Negative)',      value: this.regs.n.toString(), variablesReference: 0 },
+      { name: 'Z (Zero)',          value: this.regs.z.toString(), variablesReference: 0 },
+      { name: 'V (Overflow)',      value: this.regs.v.toString(), variablesReference: 0 },
+      { name: 'C (Carry)',         value: this.regs.c.toString(), variablesReference: 0 },
     ];
-  }
-
+} else if (kind === 'symbols') {
+  variables = this.currentVariables.map(v => ({
+    name: v.name,
+    value: this.formatSymbolValue(v.value, v.type),
+    type: v.type,
+    variablesReference: 0,
+  }));
+}
   response.body = { variables };
   this.sendResponse(response);
+}
+
+private formatSymbolValue(value: number, type?: string): string {
+  switch (type) {
+    case 'byte':
+      return '0x' + (value & 0xFF).toString(16).toUpperCase().padStart(2, '0');
+    case 'word':
+      return '0x' + (value & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+    case 'long':
+    default:
+      return '0x' + (value >>> 0).toString(16).toUpperCase().padStart(8, '0');
+  }
+}
+
+private buildWatchVariables(): DebugProtocol.Variable[] {
+  return [
+    {
+      name: 'Mem at A0',
+      value: '0x' + this.regs.a[0].toString(16).toUpperCase(),
+      variablesReference: this.variableHandles.create('mem-a0' as any),  // or a more specific kind
+    },
+    {
+      name: 'Mem at SP',
+      value: '0x' + this.regs.a[7].toString(16).toUpperCase(),
+      variablesReference: this.variableHandles.create('mem-sp' as any),
+    },
+  ];
 }
 
 protected continueRequest(response: DebugProtocol.ContinueResponse): void {
