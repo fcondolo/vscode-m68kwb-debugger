@@ -87,12 +87,20 @@ export class EmulatorServer extends EventEmitter {
   pause()    { this.send({ cmd: 'pause' }); }
 
   disconnect(): void {
-    this.ws?.close();
-    this.ws = undefined;
-    this.wss?.close();
-    this.wss = undefined;
-    this.removeAllListeners();
+  // Tell the emulator to stop before we tear down the socket.
+  if (this.ws && this.ws.readyState === this.ws.OPEN) {
+    try {
+      this.ws.send(JSON.stringify({ cmd: 'stop' }));
+    } catch (_) { /* ignore */ }
   }
+  this.ws?.close();
+  this.ws = undefined;
+  this.wss?.close();
+  this.wss = undefined;
+  this.pendingMessages = [];
+  this.removeAllListeners();
+}
+
 
   private send(obj: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {

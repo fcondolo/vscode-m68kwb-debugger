@@ -417,8 +417,10 @@ private buildWatchVariables(): DebugProtocol.Variable[] {
 
 protected continueRequest(response: DebugProtocol.ContinueResponse): void {
   this.client.cont();
+  response.body = { allThreadsContinued: true };
   this.sendResponse(response);
 }
+
 protected nextRequest(response: DebugProtocol.NextResponse): void {
   this.client.stepOver();
   this.sendResponse(response);
