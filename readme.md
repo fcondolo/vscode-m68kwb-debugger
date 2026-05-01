@@ -1,6 +1,6 @@
-# M68K Debug
+# M68KWB Debug
 
-Debug adapter for the Motorola 68000 emulator. Connects to the emulator running in a Live Preview panel.
+Microsoft Visual Studio Code Debug adapter for M68KWB. Connects to M68KWB running in a Live Preview panel.
 
 ## Requirements
 - ms-vscode.live-server extension
