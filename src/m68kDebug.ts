@@ -179,9 +179,9 @@ protected async launchRequest(
   args: LaunchArgs
 ): Promise<void> {
   // Validate the program looks like M68K assembly
-  if (!args.program?.match(/\.(s|asm|x68|i)$/i)) {
+  if (!args.program?.match(/\.(s|asm|x68|i|js)$/i)) {
     this.sendErrorResponse(response, 1002,
-      `'${args.program}' is not an M68K source file. Open a .s, .asm, .x68, or .i file before pressing F5.`);
+      `'${args.program}' is not an M68K source file. Open a .js, .s, .asm, .x68, or .i file before pressing F5.`);
     return;
   }
 

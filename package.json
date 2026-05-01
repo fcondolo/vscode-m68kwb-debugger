@@ -76,6 +76,7 @@
       {
         "id": "m68k",
         "extensions": [
+          ".js",
           ".s",
           ".asm",
           ".x68"
