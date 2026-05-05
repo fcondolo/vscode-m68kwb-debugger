@@ -39,18 +39,18 @@ export class EmulatorServer extends EventEmitter {
 
         this.emit('connected');
 
-      ws.on('message', (data) => {
-        const text = data.toString();
-        console.error('[server] received:', text);
-        try {
-          const msg = JSON.parse(text);
-          console.error('[server] parsed event:', msg.event);
+        ws.on('message', (data) => {
+          const msg = JSON.parse(data.toString());
+          if (msg.event === 'reply' && typeof msg.requestId === 'number') {
+            const pending = this.pendingRequests.get(msg.requestId);
+            if (pending) {
+              this.pendingRequests.delete(msg.requestId);
+              pending.resolve(msg);
+            }
+            return;
+          }
           this.emit(msg.event, msg);
-        } catch (err) {
-          console.error('[server] parse failed:', err);
-        }
-      });
-
+        });
 
         ws.on('close', () => {
           if (this.ws === ws) { this.ws = undefined; }
@@ -77,6 +77,18 @@ export class EmulatorServer extends EventEmitter {
     });
   }
 
+  stepBack() { 
+    this.send({ cmd: 'stepBack' }); 
+  }
+  
+  reverseContinue() { 
+    this.send({ cmd: 'reverseContinue' }); 
+  }
+
+  stepOut() { 
+    this.send({ cmd: 'stepOut' }); 
+  }
+
   load(program: string)               { this.send({ cmd: 'load', program }); }
   setBreakpoints(file: string, lines: number[]) {
     this.send({ cmd: 'setBreakpoints', file, lines });
@@ -101,6 +113,36 @@ export class EmulatorServer extends EventEmitter {
   this.removeAllListeners();
 }
 
+private nextRequestId = 1;
+private pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+
+readMemory(addr: number, count: number): Promise<Uint8Array> {
+  return this.sendRequest({ cmd: 'readMemory', addr, count })
+    .then(reply => Uint8Array.from(reply.bytes));   // assumes bridge sends bytes as number[]
+}
+
+writeMemory(addr: number, bytes: Uint8Array): Promise<void> {
+  return this.sendRequest({
+    cmd: 'writeMemory',
+    addr,
+    bytes: Array.from(bytes),
+  });
+}
+
+private sendRequest(obj: any): Promise<any> {
+  const requestId = this.nextRequestId++;
+  return new Promise((resolve, reject) => {
+    this.pendingRequests.set(requestId, { resolve, reject });
+    this.send({ ...obj, requestId });
+    // Optional timeout
+    setTimeout(() => {
+      if (this.pendingRequests.has(requestId)) {
+        this.pendingRequests.delete(requestId);
+        reject(new Error('Emulator request timeout'));
+      }
+    }, 5000);
+  });
+}
 
   private send(obj: any) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {

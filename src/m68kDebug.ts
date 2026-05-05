@@ -43,15 +43,35 @@ protected initializeRequest(
 ): void {
   response.body = response.body ?? {};
   response.body.supportsConfigurationDoneRequest = true;
-  response.body.supportsSteppingGranularity = true;
-  response.body.supportsStepBack = false;
+  response.body.supportsSteppingGranularity = false;
+  response.body.supportsStepBack = true;
   response.body.supportsRestartRequest = false;
   response.body.supportsEvaluateForHovers = true;
+  response.body.supportsReadMemoryRequest = true;
+  response.body.supportsWriteMemoryRequest = true;
 
   this.sendResponse(response);
 
   // Tell VS Code we're ready to receive breakpoints and config.
   this.sendEvent(new InitializedEvent());
+}
+
+protected stepBackRequest(
+  response: DebugProtocol.StepBackResponse,
+  args: DebugProtocol.StepBackArguments
+): void {
+  this.client.stepBack();
+  response.body = { allThreadsContinued: true };
+  this.sendResponse(response);
+}
+
+protected reverseContinueRequest(
+  response: DebugProtocol.ReverseContinueResponse,
+  args: DebugProtocol.ReverseContinueArguments
+): void {
+  this.client.reverseContinue();
+  response.body = { allThreadsContinued: true };
+  this.sendResponse(response);
 }
 
 protected evaluateRequest(
@@ -104,6 +124,56 @@ private evaluateExpression(expr: string): string | undefined {
   if (num !== undefined) return this.formatHex32(num);
 
   return undefined;
+}
+
+protected async writeMemoryRequest(
+  response: DebugProtocol.WriteMemoryResponse,
+  args: DebugProtocol.WriteMemoryArguments
+): Promise<void> {
+  const baseAddr = parseInt(args.memoryReference, 16);
+  const offset   = args.offset ?? 0;
+  const addr     = baseAddr + offset;
+  const bytes    = Buffer.from(args.data, 'base64');
+
+  try {
+    await this.client.writeMemory(addr, bytes);
+    response.body = {
+      offset: 0,
+      bytesWritten: bytes.length,
+    };
+  } catch (err: any) {
+    this.sendErrorResponse(response, 2003, `Failed to write memory: ${err.message}`);
+    return;
+  }
+
+  this.sendResponse(response);
+}
+protected async readMemoryRequest(
+  response: DebugProtocol.ReadMemoryResponse,
+  args: DebugProtocol.ReadMemoryArguments
+): Promise<void> {
+  // args.memoryReference is a string — typically a hex address like "0x1000",
+  // but it's whatever you put in the memoryReference field of variables/scopes.
+  const baseAddr = parseInt(args.memoryReference, 16);
+  const offset   = args.offset ?? 0;
+  const count    = args.count;     // bytes requested
+  const addr     = baseAddr + offset;
+
+  try {
+    const bytes = await this.client.readMemory(addr, count);
+    // bytes is a Uint8Array
+
+    response.body = {
+      address: '0x' + addr.toString(16).toUpperCase(),
+      data: Buffer.from(bytes).toString('base64'),
+      // unreadableBytes: count - bytes.length,  // if you got fewer bytes than asked
+    };
+  } catch (err: any) {
+    this.sendErrorResponse(response, 2002, `Failed to read memory at 0x${addr.toString(16)}: ${err.message}`);
+    return;
+  }
+
+  this.sendResponse(response);
 }
 
 private lookupRegister(name: string): number | undefined {
@@ -225,6 +295,7 @@ protected async launchRequest(
   });
   this.client.on('emulator-disconnected', () => {
     this.sendEvent(new OutputEvent('Emulator disconnected.\n', 'console'));
+    this.sendEvent(new TerminatedEvent());
   });
 
   this.sendResponse(response);
@@ -364,7 +435,10 @@ protected variablesRequest(
     }));
   } else if (kind === 'address') {
     variables = this.regs.a.map((v, i) => ({
-      name: `A${i}`, value: hex32(v), variablesReference: 0,
+      name: `A${i}`,
+      value: hex32(v),
+      variablesReference: 0,
+      memoryReference: '0x' + (v >>> 0).toString(16),   // ← lets user view memory at this address
     }));
   } else if (kind === 'flags') {
     // Decompose SR into individual flag bits
@@ -429,11 +503,13 @@ protected stepInRequest(response: DebugProtocol.StepInResponse): void {
   this.client.stepIn();
   this.sendResponse(response);
 }
+
 protected stepOutRequest(response: DebugProtocol.StepOutResponse): void {
-  // If your emulator doesn't implement real step-out, fall back to step-over.
-  this.client.stepOver();
+  this.client.stepOut();
+  response.body = { allThreadsContinued: true };
   this.sendResponse(response);
 }
+
 protected pauseRequest(response: DebugProtocol.PauseResponse): void {
   this.client.pause();
   this.sendResponse(response);
